@@ -1,6 +1,6 @@
 --- a/chrome/browser/helium_flag_entries.h
 +++ b/chrome/browser/helium_flag_entries.h
-@@ -27,6 +27,10 @@
+@@ -27,6 +27,16 @@
       "Enables autoscroll on middle click. Helium flag, Chromium feature.",
       kOsDesktop,
       FEATURE_VALUE_TYPE(blink::features::kHeliumMiddleClickAutoscroll)},
@@ -8,6 +8,12 @@
 +     "Hold the right mouse button and draw over a page to navigate. Helium "
 +     "flag.",
 +     kOsDesktop, FEATURE_VALUE_TYPE(features::kHeliumMouseGestures)},
++    {features::kHeliumMouseGestureBindingsSwitch, "Mouse Gesture Bindings",
++     "Comma-separated gesture=action pairs, where a gesture is a sequence of "
++     "L, R, U, D strokes. Example: L=back,R=forward,UD=reload. Leave empty "
++     "for the defaults. See the project README for all actions. Helium flag.",
++     kOsDesktop,
++     STRING_VALUE_TYPE(features::kHeliumMouseGestureBindingsSwitch, "")},
      {helium::kHeliumNoiseCommandLine, "Helium Noise",
       "Helium's anti-fingerprinting functionality. Adds insignificant noise to "
       "various features to deceive fingerprinting scripts. Enabled by default, "
@@ -36,11 +42,13 @@
  bool HeliumNativeFrameAvailable() {
 --- a/chrome/browser/ui/ui_features.h
 +++ b/chrome/browser/ui/ui_features.h
-@@ -29,6 +29,8 @@
+@@ -29,6 +29,10 @@
  
  BASE_DECLARE_FEATURE(kHeliumHidePageActions);
  
 +BASE_DECLARE_FEATURE(kHeliumMouseGestures);
++inline constexpr char kHeliumMouseGestureBindingsSwitch[] =
++    "helium-mouse-gesture-bindings";
 +
  BASE_DECLARE_FEATURE(kAllowEyeDropperWGCScreenCapture);
  
@@ -112,21 +120,27 @@
    gfx::SlideAnimation zen_side_chrome_animation_;
 --- a/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
 +++ b/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,310 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/views/frame/mouse_gesture_handler.h"
 +
++#include <algorithm>
 +#include <cmath>
++#include <string_view>
 +#include <tuple>
 +
++#include "base/command_line.h"
 +#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/strings/string_split.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "cc/paint/paint_flags.h"
 +#include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/ui_features.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "third_party/skia/include/core/SkColor.h"
 +#include "third_party/skia/include/core/SkPath.h"
@@ -153,21 +167,68 @@
 +constexpr SkColor kTrailColor = SkColorSetARGB(0xCC, 0x3B, 0x82, 0xF6);
 +constexpr float kTrailWidth = 3.0f;
 +
-+struct GestureBinding {
-+  const char* directions;
++// Used when the bindings flag is empty.
++constexpr char kDefaultBindings[] =
++    "L=back,R=forward,D=new-tab,U=close-tab,UD=reload,DR=bookmarks,"
++    "LD=downloads";
++
++struct GestureAction {
++  const char* name;
 +  int command_id;
 +};
 +
-+// Mirrors the user's Vivaldi configuration.
-+constexpr GestureBinding kBindings[] = {
-+    {"L", IDC_BACK},
-+    {"R", IDC_FORWARD},
-+    {"D", IDC_NEW_TAB},
-+    {"U", IDC_CLOSE_TAB},
-+    {"UD", IDC_RELOAD},
-+    {"DR", IDC_SHOW_BOOKMARK_SIDE_PANEL},
-+    {"LD", IDC_SHOW_DOWNLOADS},
++constexpr GestureAction kActions[] = {
++    {"back", IDC_BACK},
++    {"forward", IDC_FORWARD},
++    {"reload", IDC_RELOAD},
++    {"hard-reload", IDC_RELOAD_BYPASSING_CACHE},
++    {"stop", IDC_STOP},
++    {"home", IDC_HOME},
++    {"new-tab", IDC_NEW_TAB},
++    {"close-tab", IDC_CLOSE_TAB},
++    {"restore-tab", IDC_RESTORE_TAB},
++    {"duplicate-tab", IDC_DUPLICATE_TAB},
++    {"pin-tab", IDC_WINDOW_PIN_TAB},
++    {"next-tab", IDC_SELECT_NEXT_TAB},
++    {"previous-tab", IDC_SELECT_PREVIOUS_TAB},
++    {"new-window", IDC_NEW_WINDOW},
++    {"new-incognito-window", IDC_NEW_INCOGNITO_WINDOW},
++    {"close-window", IDC_CLOSE_WINDOW},
++    {"minimize-window", IDC_MINIMIZE_WINDOW},
++    {"fullscreen", IDC_FULLSCREEN},
++    {"zoom-in", IDC_ZOOM_PLUS},
++    {"zoom-out", IDC_ZOOM_MINUS},
++    {"zoom-reset", IDC_ZOOM_NORMAL},
++    {"bookmarks", IDC_SHOW_BOOKMARK_SIDE_PANEL},
++    {"bookmark-manager", IDC_SHOW_BOOKMARK_MANAGER},
++    {"history", IDC_SHOW_HISTORY},
++    {"downloads", IDC_SHOW_DOWNLOADS},
++    {"devtools", IDC_DEV_TOOLS},
++    {"toggle-vertical-tabs", IDC_TOGGLE_VERTICAL_TABS},
 +};
++
++// Parses "UD=reload,L=back" into a map. Malformed entries are skipped.
++base::flat_map<std::string, int> ParseBindings(std::string_view spec) {
++  base::flat_map<std::string, int> bindings;
++  for (std::string_view entry : base::SplitStringPiece(
++           spec, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
++    const std::vector<std::string_view> parts = base::SplitStringPiece(
++        entry, "=", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
++    if (parts.size() != 2 || parts[0].empty() ||
++        parts[0].find_first_not_of("LRUD") != std::string_view::npos) {
++      LOG(WARNING) << "Ignoring mouse gesture binding: " << entry;
++      continue;
++    }
++    const auto* action = std::ranges::find_if(
++        kActions, [&](const GestureAction& a) { return parts[1] == a.name; });
++    if (action == std::end(kActions)) {
++      LOG(WARNING) << "Unknown mouse gesture action: " << parts[1];
++      continue;
++    }
++    bindings[std::string(parts[0])] = action->command_id;
++  }
++  return bindings;
++}
 +
 +char DirectionFor(const gfx::Vector2dF& delta) {
 +  if (std::abs(delta.x()) >= std::abs(delta.y())) {
@@ -181,6 +242,10 @@
 +MouseGestureHandler::MouseGestureHandler(BrowserView* browser_view,
 +                                         aura::Window* root_window)
 +    : browser_view_(browser_view), root_window_(root_window) {
++  std::string spec =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          features::kHeliumMouseGestureBindingsSwitch);
++  bindings_ = ParseBindings(spec.empty() ? kDefaultBindings : spec);
 +  root_window_->AddPreTargetHandler(this);
 +}
 +
@@ -281,11 +346,9 @@
 +}
 +
 +void MouseGestureHandler::ExecuteGesture() {
-+  for (const auto& binding : kBindings) {
-+    if (directions_ == binding.directions) {
-+      chrome::ExecuteCommand(browser_view_->browser(), binding.command_id);
-+      return;
-+    }
++  auto it = bindings_.find(directions_);
++  if (it != bindings_.end()) {
++    chrome::ExecuteCommand(browser_view_->browser(), it->second);
 +  }
 +}
 +
@@ -370,7 +433,7 @@
 +}
 --- a/chrome/browser/ui/views/frame/mouse_gesture_handler.h
 +++ b/chrome/browser/ui/views/frame/mouse_gesture_handler.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,87 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -382,6 +445,7 @@
 +#include <string>
 +#include <vector>
 +
++#include "base/containers/flat_map.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "ui/compositor/layer_delegate.h"
@@ -446,8 +510,10 @@
 +  gfx::PointF press_location_;
 +  // Last point where a direction was recorded.
 +  gfx::PointF anchor_;
-+  // Directions as Vivaldi encodes them: 'R', 'D', 'L', 'U'.
++  // Directions recorded so far: 'R', 'D', 'L', 'U'.
 +  std::string directions_;
++  // Direction sequence -> command id, from the bindings flag.
++  base::flat_map<std::string, int> bindings_;
 +  std::vector<gfx::PointF> trail_;
 +  std::unique_ptr<ui::Layer> trail_layer_;
 +

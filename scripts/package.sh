@@ -23,8 +23,10 @@ if [ "$_arch" = "x64" ]; then
     _arch="x86_64"
 fi
 
-_release_name="$_app_name-$_version-$_arch"
-_update_info="gh-releases-zsync|imputnet|helium-linux|latest|$_app_name-*-$_arch.AppImage.zsync"
+# Unofficial mouse gestures build: distinct asset names, and AppImage
+# updates come from this fork rather than the official releases.
+_release_name="$_app_name-gestures-$_version-$_arch"
+_update_info="gh-releases-zsync|rafzzzzzz|helium-linux|latest|$_app_name-gestures-*-$_arch.AppImage.zsync"
 _tarball_name="${_release_name}_linux"
 _tarball_dir="$_release_dir/$_tarball_name"
 
