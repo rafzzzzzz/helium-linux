@@ -104,7 +104,7 @@
    gfx::SlideAnimation zen_side_chrome_animation_;
 --- a/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
 +++ b/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,249 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -157,6 +157,7 @@
 +    {"U", IDC_CLOSE_TAB},
 +    {"UD", IDC_RELOAD},
 +    {"DR", IDC_SHOW_BOOKMARK_SIDE_PANEL},
++    {"LD", IDC_SHOW_DOWNLOADS},
 +};
 +
 +char DirectionFor(const gfx::Vector2dF& delta) {
