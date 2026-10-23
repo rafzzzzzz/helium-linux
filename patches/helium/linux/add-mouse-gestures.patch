@@ -1,0 +1,441 @@
+--- a/chrome/browser/helium_flag_entries.h
++++ b/chrome/browser/helium_flag_entries.h
+@@ -27,6 +27,10 @@
+      "Enables autoscroll on middle click. Helium flag, Chromium feature.",
+      kOsDesktop,
+      FEATURE_VALUE_TYPE(blink::features::kHeliumMiddleClickAutoscroll)},
++    {"helium-mouse-gestures", "Mouse Gestures",
++     "Hold the right mouse button and draw over a page to navigate. Helium "
++     "flag.",
++     kOsDesktop, FEATURE_VALUE_TYPE(features::kHeliumMouseGestures)},
+     {helium::kHeliumNoiseCommandLine, "Helium Noise",
+      "Helium's anti-fingerprinting functionality. Adds insignificant noise to "
+      "various features to deceive fingerprinting scripts. Enabled by default, "
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -3551,6 +3551,8 @@
+       "views/frame/base_tab_strip_region_view.cc",
+       "views/frame/base_tab_strip_region_view.h",
+       "views/frame/browser_view.cc",
++      "views/frame/mouse_gesture_handler.cc",
++      "views/frame/mouse_gesture_handler.h",
+       "views/frame/horizontal_tab_strip_region_view.cc",
+       "views/frame/horizontal_tab_strip_region_view.h",
+       "views/frame/vertical_tab_strip_region_view.cc",
+--- a/chrome/browser/ui/ui_features.cc
++++ b/chrome/browser/ui/ui_features.cc
+@@ -38,6 +38,9 @@
+ 
+ BASE_FEATURE(kHeliumNativeFrameMaterials, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++// Vivaldi-style right-button mouse gestures over web contents.
++BASE_FEATURE(kHeliumMouseGestures, base::FEATURE_ENABLED_BY_DEFAULT);
++
+ BASE_FEATURE(kHeliumHidePageActions, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ bool HeliumNativeFrameAvailable() {
+--- a/chrome/browser/ui/ui_features.h
++++ b/chrome/browser/ui/ui_features.h
+@@ -29,6 +29,8 @@
+ 
+ BASE_DECLARE_FEATURE(kHeliumHidePageActions);
+ 
++BASE_DECLARE_FEATURE(kHeliumMouseGestures);
++
+ BASE_DECLARE_FEATURE(kAllowEyeDropperWGCScreenCapture);
+ 
+ BASE_DECLARE_FEATURE(kCtrlTabMru);
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -177,6 +177,7 @@
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h"
+ #include "chrome/browser/ui/views/frame/main_background_region_view.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "chrome/browser/ui/views/frame/mouse_gesture_handler.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+@@ -4828,6 +4829,7 @@
+ void BrowserView::OnWidgetDestroying(views::Widget* widget) {
+   DCHECK(widget_observation_.IsObservingSource(widget));
+   widget_observation_.Reset();
++  mouse_gesture_handler_.reset();
+ 
+   // Permanently suppress layout during teardown to avoid running layout on
+   // destroying child views or widgets.
+@@ -5755,6 +5757,11 @@
+   // Stow a pointer to the browser's profile onto the window handle so
+   // that windows will be styled with the appropriate NativeTheme.
+   SetThemeProfileForWindow(GetNativeWindow(), browser_->GetProfile());
++
++  if (base::FeatureList::IsEnabled(features::kHeliumMouseGestures)) {
++    mouse_gesture_handler_ = std::make_unique<MouseGestureHandler>(
++        this, GetNativeWindow()->GetRootWindow());
++  }
+ #endif
+ 
+   toolbar_->Init();
+@@ -5921,6 +5928,7 @@
+ 
+ void BrowserView::RemovedFromWidget() {
+   zen_mode_event_monitor_.reset();
++  mouse_gesture_handler_.reset();
+   app_menu_control_observation_.Reset();
+   CHECK(GetFocusManager());
+ #if BUILDFLAG(IS_WIN)
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -83,6 +83,7 @@
+ class BookmarkBarController;
+ class BookmarkBarView;
+ class BrowserWindowInterface;
++class MouseGestureHandler;
+ class BrowserViewLayout;
+ class ContentsContainerView;
+ class ContentsWebView;
+@@ -1503,6 +1504,8 @@
+ 
+   // Zen mode state.
+   std::unique_ptr<views::EventMonitor> zen_mode_event_monitor_;
++
++  std::unique_ptr<MouseGestureHandler> mouse_gesture_handler_;
+   std::unique_ptr<ExpandOnHoverLock> zen_expand_on_hover_lock_;
+   gfx::SlideAnimation zen_top_chrome_animation_;
+   gfx::SlideAnimation zen_side_chrome_animation_;
+--- a/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
++++ b/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
+@@ -0,0 +1,248 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/mouse_gesture_handler.h"
++
++#include <cmath>
++#include <tuple>
++
++#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "third_party/skia/include/core/SkPath.h"
++#include "ui/aura/window.h"
++#include "ui/aura/window_tree_host.h"
++#include "ui/compositor/layer.h"
++#include "ui/compositor/paint_recorder.h"
++#include "ui/events/base_event_utils.h"
++#include "ui/events/event.h"
++#include "ui/events/event_sink.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/point_conversions.h"
++#include "ui/gfx/geometry/vector2d_f.h"
++#include "ui/views/view.h"
++
++namespace {
++
++// Distance the pointer must travel before a press becomes a gesture.
++constexpr float kActivationDistance = 10.0f;
++// Minimum length of one stroke segment before its direction counts.
++constexpr float kSegmentDistance = 20.0f;
++
++constexpr SkColor kTrailColor = SkColorSetARGB(0xCC, 0x3B, 0x82, 0xF6);
++constexpr float kTrailWidth = 3.0f;
++
++struct GestureBinding {
++  const char* directions;
++  int command_id;
++};
++
++// Mirrors the user's Vivaldi configuration.
++constexpr GestureBinding kBindings[] = {
++    {"L", IDC_BACK},
++    {"R", IDC_FORWARD},
++    {"D", IDC_NEW_TAB},
++    {"U", IDC_CLOSE_TAB},
++    {"UD", IDC_RELOAD},
++    {"DR", IDC_SHOW_BOOKMARK_SIDE_PANEL},
++};
++
++char DirectionFor(const gfx::Vector2dF& delta) {
++  if (std::abs(delta.x()) >= std::abs(delta.y())) {
++    return delta.x() > 0 ? 'R' : 'L';
++  }
++  return delta.y() > 0 ? 'D' : 'U';
++}
++
++}  // namespace
++
++MouseGestureHandler::MouseGestureHandler(BrowserView* browser_view,
++                                         aura::Window* root_window)
++    : browser_view_(browser_view), root_window_(root_window) {
++  root_window_->AddPreTargetHandler(this);
++}
++
++MouseGestureHandler::~MouseGestureHandler() {
++  root_window_->RemovePreTargetHandler(this);
++}
++
++void MouseGestureHandler::OnMouseEvent(ui::MouseEvent* event) {
++  if (replaying_) {
++    return;
++  }
++
++  const gfx::PointF location = event->root_location_f();
++
++  switch (event->type()) {
++    case ui::EventType::kMousePressed:
++      if (state_ == State::kIdle && event->IsOnlyRightMouseButton() &&
++          IsInContentsArea(location)) {
++        state_ = State::kPressed;
++        press_flags_ = event->flags();
++        press_location_ = location;
++        anchor_ = location;
++        trail_ = {location};
++        event->SetHandled();
++      } else if (state_ != State::kIdle) {
++        // Another button pressed mid-gesture: abort and eat it.
++        Reset();
++        event->SetHandled();
++      }
++      return;
++
++    case ui::EventType::kMouseMoved:
++    case ui::EventType::kMouseDragged:
++      if (state_ == State::kIdle) {
++        return;
++      }
++      if (state_ == State::kPressed &&
++          (location - press_location_).Length() >= kActivationDistance) {
++        state_ = State::kGesturing;
++        ShowTrail();
++      }
++      if (state_ == State::kGesturing) {
++        AddPoint(location);
++      }
++      event->SetHandled();
++      return;
++
++    case ui::EventType::kMouseReleased:
++      if (state_ == State::kIdle) {
++        return;
++      }
++      if (state_ == State::kGesturing) {
++        ExecuteGesture();
++      } else {
++        ReplayClick(press_location_, press_flags_);
++      }
++      Reset();
++      event->SetHandled();
++      return;
++
++    case ui::EventType::kMouseCaptureChanged:
++      if (state_ != State::kIdle) {
++        Reset();
++      }
++      return;
++
++    default:
++      return;
++  }
++}
++
++bool MouseGestureHandler::IsInContentsArea(
++    const gfx::PointF& root_location) const {
++  views::View* contents = browser_view_->contents_container();
++  if (!contents || !contents->GetVisible()) {
++    return false;
++  }
++  gfx::Point point = gfx::ToFlooredPoint(root_location);
++  views::View::ConvertPointFromWidget(contents, &point);
++  return contents->HitTestPoint(point);
++}
++
++void MouseGestureHandler::AddPoint(const gfx::PointF& root_location) {
++  trail_.push_back(root_location);
++  if (trail_layer_) {
++    trail_layer_->SchedulePaint(gfx::Rect(trail_layer_->size()));
++  }
++
++  const gfx::Vector2dF delta = root_location - anchor_;
++  if (delta.Length() < kSegmentDistance) {
++    return;
++  }
++  const char direction = DirectionFor(delta);
++  if (directions_.empty() || directions_.back() != direction) {
++    directions_.push_back(direction);
++  }
++  anchor_ = root_location;
++}
++
++void MouseGestureHandler::ExecuteGesture() {
++  for (const auto& binding : kBindings) {
++    if (directions_ == binding.directions) {
++      chrome::ExecuteCommand(browser_view_->browser(), binding.command_id);
++      return;
++    }
++  }
++}
++
++void MouseGestureHandler::Reset() {
++  state_ = State::kIdle;
++  directions_.clear();
++  trail_.clear();
++  HideTrail();
++}
++
++void MouseGestureHandler::ShowTrail() {
++  trail_layer_ = std::make_unique<ui::Layer>(ui::LAYER_TEXTURED);
++  trail_layer_->set_delegate(this);
++  trail_layer_->SetFillsBoundsOpaquely(false);
++  trail_layer_->SetBounds(gfx::Rect(root_window_->bounds().size()));
++  root_window_->layer()->Add(trail_layer_.get());
++  root_window_->layer()->StackAtTop(trail_layer_.get());
++}
++
++void MouseGestureHandler::HideTrail() {
++  trail_layer_.reset();
++}
++
++void MouseGestureHandler::OnPaintLayer(const ui::PaintContext& context) {
++  ui::PaintRecorder recorder(context, trail_layer_->size());
++  if (trail_.size() < 2) {
++    return;
++  }
++
++  SkPath path;
++  path.moveTo(trail_[0].x(), trail_[0].y());
++  for (size_t i = 1; i < trail_.size(); ++i) {
++    path.lineTo(trail_[i].x(), trail_[i].y());
++  }
++
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setStyle(cc::PaintFlags::kStroke_Style);
++  flags.setStrokeWidth(kTrailWidth);
++  flags.setStrokeCap(cc::PaintFlags::kRound_Cap);
++  flags.setStrokeJoin(cc::PaintFlags::kRound_Join);
++  flags.setColor(kTrailColor);
++  recorder.canvas()->DrawPath(path, flags);
++}
++
++void MouseGestureHandler::ReplayClick(gfx::PointF root_location, int flags) {
++  // Dispatch asynchronously so we don't re-enter the event dispatcher
++  // while it's still delivering the original release.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<MouseGestureHandler> self,
++                        gfx::PointF location, int flags) {
++                       if (!self) {
++                         return;
++                       }
++                       self->DispatchSynthetic(ui::EventType::kMousePressed,
++                                               location, flags);
++                       self->DispatchSynthetic(ui::EventType::kMouseReleased,
++                                               location, flags);
++                     },
++                     weak_factory_.GetWeakPtr(), root_location, flags));
++}
++
++void MouseGestureHandler::DispatchSynthetic(ui::EventType type,
++                                            const gfx::PointF& root_location,
++                                            int flags) {
++  aura::WindowTreeHost* host = root_window_->GetHost();
++  if (!host) {
++    return;
++  }
++  ui::MouseEvent event(type, root_location, root_location,
++                       ui::EventTimeForNow(), flags,
++                       ui::EF_RIGHT_MOUSE_BUTTON);
++  replaying_ = true;
++  std::ignore = host->GetEventSink()->OnEventFromSource(&event);
++  replaying_ = false;
++}
+--- a/chrome/browser/ui/views/frame/mouse_gesture_handler.h
++++ b/chrome/browser/ui/views/frame/mouse_gesture_handler.h
+@@ -0,0 +1,83 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_MOUSE_GESTURE_HANDLER_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_MOUSE_GESTURE_HANDLER_H_
++
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "ui/compositor/layer_delegate.h"
++#include "ui/events/event_handler.h"
++#include "ui/gfx/geometry/point_f.h"
++
++namespace aura {
++class Window;
++}
++
++namespace ui {
++class Layer;
++class MouseEvent;
++}  // namespace ui
++
++class BrowserView;
++
++// Vivaldi-style mouse gestures: hold the right mouse button over web
++// contents, draw a stroke, release. A right click without movement is
++// replayed to the page so the context menu still works.
++//
++// Installed as a pre-target handler on the browser window's root, so it
++// sees events before the renderer does. This matters on Linux, where the
++// context menu opens on press and extensions can't intercept it.
++class MouseGestureHandler : public ui::EventHandler, public ui::LayerDelegate {
++ public:
++  MouseGestureHandler(BrowserView* browser_view, aura::Window* root_window);
++  MouseGestureHandler(const MouseGestureHandler&) = delete;
++  MouseGestureHandler& operator=(const MouseGestureHandler&) = delete;
++  ~MouseGestureHandler() override;
++
++  // ui::EventHandler:
++  void OnMouseEvent(ui::MouseEvent* event) override;
++
++  // ui::LayerDelegate:
++  void OnPaintLayer(const ui::PaintContext& context) override;
++  void OnDeviceScaleFactorChanged(float old_device_scale_factor,
++                                  float new_device_scale_factor) override {}
++
++ private:
++  enum class State { kIdle, kPressed, kGesturing };
++
++  bool IsInContentsArea(const gfx::PointF& root_location) const;
++  void AddPoint(const gfx::PointF& root_location);
++  void ExecuteGesture();
++  void Reset();
++  void ShowTrail();
++  void HideTrail();
++  void ReplayClick(gfx::PointF root_location, int flags);
++  void DispatchSynthetic(ui::EventType type,
++                         const gfx::PointF& root_location,
++                         int flags);
++
++  raw_ptr<BrowserView> browser_view_;
++  raw_ptr<aura::Window> root_window_;
++
++  State state_ = State::kIdle;
++  bool replaying_ = false;
++  int press_flags_ = 0;
++
++  gfx::PointF press_location_;
++  // Last point where a direction was recorded.
++  gfx::PointF anchor_;
++  // Directions as Vivaldi encodes them: 'R', 'D', 'L', 'U'.
++  std::string directions_;
++  std::vector<gfx::PointF> trail_;
++  std::unique_ptr<ui::Layer> trail_layer_;
++
++  base::WeakPtrFactory<MouseGestureHandler> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_MOUSE_GESTURE_HANDLER_H_
