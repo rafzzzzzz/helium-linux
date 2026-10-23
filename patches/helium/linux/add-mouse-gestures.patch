@@ -112,7 +112,7 @@
    gfx::SlideAnimation zen_side_chrome_animation_;
 --- a/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
 +++ b/chrome/browser/ui/views/frame/mouse_gesture_handler.cc
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,255 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -357,7 +357,11 @@
 +  if (!host) {
 +    return;
 +  }
-+  ui::MouseEvent event(type, root_location, root_location,
++  // The event sink expects host pixels, not DIPs; without this the replayed
++  // click lands in the wrong place on scaled displays.
++  gfx::PointF location_in_pixels = root_location;
++  host->ConvertDIPToPixels(&location_in_pixels);
++  ui::MouseEvent event(type, location_in_pixels, location_in_pixels,
 +                       ui::EventTimeForNow(), flags,
 +                       ui::EF_RIGHT_MOUSE_BUTTON);
 +  replaying_ = true;
