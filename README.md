@@ -10,6 +10,12 @@ button over a page, draw a stroke, release.
 > report problems with this build to the Helium project — open an issue here
 > instead.
 
+## Also included
+
+- **Up to 20 shortcuts on the new tab page** (Chromium's default is 10), by
+  enabling Chromium's built-in shortcuts redesign
+  ([`ntp-20-shortcuts.patch`](patches/helium/linux/ntp-20-shortcuts.patch)).
+
 ## Why not an extension?
 
 Gesture extensions can't run on `chrome://` pages, the new tab page or pages

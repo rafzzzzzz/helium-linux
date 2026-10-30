@@ -1,0 +1,12 @@
+--- a/components/search/ntp_features.cc
++++ b/components/search/ntp_features.cc
+@@ -316,7 +316,8 @@
+ BASE_FEATURE(kLightningTakeoverEdition, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // If enabled, the shortcuts will be redesigned.
+-BASE_FEATURE(kNtpShortcutsRedesign, base::FEATURE_DISABLED_BY_DEFAULT);
++// Helium: enabled for up to 20 shortcuts on the new tab page.
++BASE_FEATURE(kNtpShortcutsRedesign, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // If enabled, the bookmark bar may be auto-removed on the NTP and new
+ // visibility settings are added.
