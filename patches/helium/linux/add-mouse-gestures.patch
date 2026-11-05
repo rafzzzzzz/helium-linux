@@ -17,20 +17,40 @@
      {helium::kHeliumNoiseCommandLine, "Helium Noise",
       "Helium's anti-fingerprinting functionality. Adds insignificant noise to "
       "various features to deceive fingerprinting scripts. Enabled by default, "
---- a/chrome/browser/ui/BUILD.gn
-+++ b/chrome/browser/ui/BUILD.gn
-@@ -3551,6 +3551,8 @@
-       "views/frame/base_tab_strip_region_view.cc",
-       "views/frame/base_tab_strip_region_view.h",
-       "views/frame/browser_view.cc",
-+      "views/frame/mouse_gesture_handler.cc",
-+      "views/frame/mouse_gesture_handler.h",
-       "views/frame/horizontal_tab_strip_region_view.cc",
-       "views/frame/horizontal_tab_strip_region_view.h",
-       "views/frame/vertical_tab_strip_region_view.cc",
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -767,7 +767,11 @@
+ }
+ 
+ source_set("browser_view") {
+-  sources = [ "browser_view.cc" ]
++  sources = [
++    "browser_view.cc",
++    "mouse_gesture_handler.cc",
++    "mouse_gesture_handler.h",
++  ]
+   public_deps = [
+     ":browser_view_header",
+     "//chrome/browser:browser_public_dependencies",
+@@ -800,6 +804,7 @@
+     ":web_contents_close_handler",
+     "//base",
+     "//base:i18n",
++    "//cc/paint",
+     "//chrome/app:branded_strings",
+     "//chrome/app:command_ids",
+     "//chrome/app:generated_resources",
+@@ -980,6 +985,7 @@
+     "//content/public/common",
+     "//extensions/common",
+     "//media/capture:capture_switches",
++    "//skia",
+     "//third_party/blink/public/common:headers",
+     "//ui/accessibility",
+     "//ui/accessibility:ax_base",
 --- a/chrome/browser/ui/ui_features.cc
 +++ b/chrome/browser/ui/ui_features.cc
-@@ -38,6 +38,9 @@
+@@ -28,6 +28,9 @@
  
  BASE_FEATURE(kHeliumNativeFrameMaterials, base::FEATURE_DISABLED_BY_DEFAULT);
  
@@ -55,7 +75,7 @@
  BASE_DECLARE_FEATURE(kCtrlTabMru);
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -177,6 +177,7 @@
+@@ -178,6 +178,7 @@
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h"
  #include "chrome/browser/ui/views/frame/main_background_region_view.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view.h"
@@ -63,7 +83,7 @@
  #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
  #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
-@@ -4828,6 +4829,7 @@
+@@ -4825,6 +4826,7 @@
  void BrowserView::OnWidgetDestroying(views::Widget* widget) {
    DCHECK(widget_observation_.IsObservingSource(widget));
    widget_observation_.Reset();
@@ -71,7 +91,7 @@
  
    // Permanently suppress layout during teardown to avoid running layout on
    // destroying child views or widgets.
-@@ -5755,6 +5757,11 @@
+@@ -5752,6 +5754,11 @@
    // Stow a pointer to the browser's profile onto the window handle so
    // that windows will be styled with the appropriate NativeTheme.
    SetThemeProfileForWindow(GetNativeWindow(), browser_->GetProfile());
@@ -83,7 +103,7 @@
  #endif
  
    toolbar_->Init();
-@@ -5921,6 +5928,7 @@
+@@ -5916,6 +5923,7 @@
  
  void BrowserView::RemovedFromWidget() {
    zen_mode_event_monitor_.reset();
@@ -93,15 +113,7 @@
  #if BUILDFLAG(IS_WIN)
 --- a/chrome/browser/ui/views/frame/browser_view.h
 +++ b/chrome/browser/ui/views/frame/browser_view.h
-@@ -76,13 +76,14 @@
- #endif
- 
- // NOTE: For more information about the objects and files in this directory,
--// view: http://dev.chromium.org/developers/design-documents/browser-window
-+// view: http://dev.ch40m1um.qjz9zk/developers/design-documents/browser-window
- 
- class AccessibilityFocusHighlight;
- class AppMenuControl;
+@@ -83,6 +83,7 @@
  class BookmarkBarController;
  class BookmarkBarView;
  class BrowserWindowInterface;
@@ -109,7 +121,7 @@
  class BrowserViewLayout;
  class ContentsContainerView;
  class ContentsWebView;
-@@ -1503,6 +1504,8 @@
+@@ -1494,6 +1495,8 @@
  
    // Zen mode state.
    std::unique_ptr<views::EventMonitor> zen_mode_event_monitor_;

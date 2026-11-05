@@ -1,6 +1,6 @@
 --- a/components/search/ntp_features.cc
 +++ b/components/search/ntp_features.cc
-@@ -316,7 +316,8 @@
+@@ -325,7 +325,8 @@
  BASE_FEATURE(kLightningTakeoverEdition, base::FEATURE_ENABLED_BY_DEFAULT);
  
  // If enabled, the shortcuts will be redesigned.
