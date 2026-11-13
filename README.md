@@ -15,6 +15,12 @@ button over a page, draw a stroke, release.
 - **Up to 20 shortcuts on the new tab page** (Chromium's default is 10), by
   enabling Chromium's built-in shortcuts redesign
   ([`ntp-20-shortcuts.patch`](patches/helium/linux/ntp-20-shortcuts.patch)).
+- **Recently closed tabs button**: one click on the toolbar button (clock icon)
+  lists every recently closed tab, group and window; click one to reopen it.
+  The browser now remembers the last 100 closed entries instead of 25. Unpin
+  or re-pin it from the button's right-click menu or *Customize toolbar →
+  Tools*
+  ([`recently-closed-tabs-button.patch`](patches/helium/linux/recently-closed-tabs-button.patch)).
 
 ## Why not an extension?
 

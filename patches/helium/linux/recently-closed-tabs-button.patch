@@ -1,0 +1,288 @@
+--- a/components/sessions/core/tab_restore_service_helper.h
++++ b/components/sessions/core/tab_restore_service_helper.h
+@@ -67,7 +67,7 @@
+   };
+ 
+   // Max number of entries we'll keep around.
+-  static const int kMaxEntries = 25;
++  static const int kMaxEntries = 100;
+ 
+   // Creates a new TabRestoreServiceHelper and provides an object that provides
+   // the current time. The TabRestoreServiceHelper does not take ownership of
+--- a/chrome/browser/ui/actions/chrome_action_id.h
++++ b/chrome/browser/ui/actions/chrome_action_id.h
+@@ -559,6 +559,7 @@
+   E(kActionCopyUrl, IDC_COPY_URL) \
+   E(kActionTabGroupsMenu, IDC_SAVED_TAB_GROUPS_MENU) \
+   E(kActionTabSearch, IDC_TAB_SEARCH) \
++  E(kActionRecentlyClosedTabs) \
+   E(kActionSplitTab, IDC_NEW_SPLIT_TAB) \
+   E(kActionFederation) \
+   E(kActionGlicContextualCueing) \
+--- a/chrome/app/generated_resources.grd
++++ b/chrome/app/generated_resources.grd
+@@ -1810,6 +1810,9 @@
+       <message name="IDS_REOPEN_GROUP" desc="The text label of the Reopen Closed Group menu item">
+         Reopen closed group
+       </message>
++      <message name="IDS_RECENTLY_CLOSED_TABS_BUTTON" desc="Tooltip and name of the toolbar button that lists recently closed tabs.">
++        Recently closed tabs
++      </message>
+       <message name="IDS_REOPEN_SPLIT" desc="The text label of the Reopen Closed Split menu item">
+         Reopen closed split view
+       </message>
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -378,6 +378,7 @@
+       "//chrome/browser/ui/views/tabs/organizer",
+       "//chrome/browser/ui/views/toolbar",
+       "//chrome/browser/ui/views/zoom",
++      "//chrome/browser/ui/tabs:tab_model",
+       "//chrome/browser/ui/web_applications:launch_utils",
+       "//chrome/browser/ui/webid",
+       "//chrome/browser/ui/webui/inspect",
+--- a/chrome/browser/ui/browser_actions.cc
++++ b/chrome/browser/ui/browser_actions.cc
+@@ -251,6 +251,14 @@
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/tabs/recent_tabs_sub_menu_model.h"
++#include "ui/base/mojom/menu_source_type.mojom.h"
++#include "ui/views/controls/menu/menu_runner.h"
++#include "ui/views/controls/menu/menu_types.h"
++#include "ui/views/widget/widget.h"
+ 
+ #if !BUILDFLAG(IS_CHROMEOS)
+ #include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
+@@ -278,6 +286,70 @@
+   return ui::Accelerator();
+ }
+ 
++// Dropdown listing every recently closed tab, group and window, shown from
++// the "Recently closed tabs" toolbar button. One instance per browser window,
++// owned by the action's callback.
++class RecentlyClosedTabsMenu {
++ public:
++  RecentlyClosedTabsMenu() = default;
++  RecentlyClosedTabsMenu(const RecentlyClosedTabsMenu&) = delete;
++  RecentlyClosedTabsMenu& operator=(const RecentlyClosedTabsMenu&) = delete;
++  ~RecentlyClosedTabsMenu() = default;
++
++  void Toggle(BrowserWindowInterface* bwi, actions::ActionItem* item) {
++    if (menu_runner_ && menu_runner_->IsRunning()) {
++      menu_runner_->Cancel();
++      return;
++    }
++    // A click on the button while the menu is open first closes the menu;
++    // don't let that same click reopen it.
++    if (base::TimeTicks::Now() - menu_closed_time_ < base::Milliseconds(250)) {
++      return;
++    }
++
++    BrowserView* const browser_view =
++        BrowserView::GetBrowserViewForBrowser(bwi);
++    if (!browser_view || !browser_view->toolbar_button_provider()) {
++      return;
++    }
++    views::View* const anchor =
++        browser_view->toolbar_button_provider()
++            ->GetBubbleAnchor(kActionRecentlyClosedTabs)
++            .GetIfView();
++    if (!anchor || !anchor->GetWidget()) {
++      return;
++    }
++
++    menu_runner_.reset();
++    model_ = std::make_unique<RecentTabsSubMenuModel>(
++        browser_view, bwi, /*closed_tabs_only=*/true);
++    item_ = item;
++    item_->SetIsShowingBubble(true);
++    menu_runner_ = std::make_unique<views::MenuRunner>(
++        model_.get(), views::MenuRunner::HAS_MNEMONICS,
++        base::BindRepeating(&RecentlyClosedTabsMenu::OnMenuClosed,
++                            weak_ptr_factory_.GetWeakPtr()));
++    menu_runner_->RunMenuAt(anchor->GetWidget(), nullptr,
++                            anchor->GetAnchorBoundsInScreen(),
++                            views::MenuAnchorPosition::kTopRight,
++                            ui::mojom::MenuSourceType::kNone);
++  }
++
++ private:
++  void OnMenuClosed() {
++    menu_closed_time_ = base::TimeTicks::Now();
++    if (item_) {
++      item_->SetIsShowingBubble(false);
++    }
++  }
++
++  std::unique_ptr<RecentTabsSubMenuModel> model_;
++  std::unique_ptr<views::MenuRunner> menu_runner_;
++  raw_ptr<actions::ActionItem> item_ = nullptr;
++  base::TimeTicks menu_closed_time_;
++  base::WeakPtrFactory<RecentlyClosedTabsMenu> weak_ptr_factory_{this};
++};
++
+ void MaybeLogSafetyHubNotificationClicked(
+     BrowserWindowInterface* bwi,
+     const actions::ActionInvocationContext& context) {
+@@ -988,6 +1060,22 @@
+           .Build());
+ 
+   root_action_item_->AddChild(
++      ChromeMenuAction(
++          base::BindRepeating(
++              [](RecentlyClosedTabsMenu* menu, BrowserWindowInterface* bwi,
++                 actions::ActionItem* item,
++                 actions::ActionInvocationContext context) {
++                menu->Toggle(bwi, item);
++              },
++              base::Owned(std::make_unique<RecentlyClosedTabsMenu>()), bwi),
++          kActionRecentlyClosedTabs, IDS_RECENTLY_CLOSED_TABS_BUTTON,
++          IDS_RECENTLY_CLOSED_TABS_BUTTON,
++          features::IsRoundedIconsEnabled()
++              ? vector_icons::kHistoryIcon
++              : vector_icons::kHistoryChromeRefreshOldIcon)
++          .Build());
++
++  root_action_item_->AddChild(
+       actions::ActionItem::Builder(
+           base::BindRepeating(
+               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
+--- a/chrome/browser/ui/tabs/recent_tabs_sub_menu_model.h
++++ b/chrome/browser/ui/tabs/recent_tabs_sub_menu_model.h
+@@ -60,8 +60,11 @@
+   // recently closed window items list.
+   int GetFirstRecentTabsCommandId();
+ 
++  // When `closed_tabs_only` is true the menu lists every recently closed tab,
++  // group and window (no history links, no cap, no tabs from other devices).
+   RecentTabsSubMenuModel(ui::AcceleratorProvider* accelerator_provider,
+-                         BrowserWindowInterface* browser);
++                         BrowserWindowInterface* browser,
++                         bool closed_tabs_only = false);
+ 
+   RecentTabsSubMenuModel(const RecentTabsSubMenuModel&) = delete;
+   RecentTabsSubMenuModel& operator=(const RecentTabsSubMenuModel&) = delete;
+@@ -311,6 +314,8 @@
+   // closed entries, and remote synced devices) is currently built in the menu.
+   bool is_dynamic_section_built_ = false;
+ 
++  const bool closed_tabs_only_;
++
+   base::WeakPtrFactory<RecentTabsSubMenuModel> weak_ptr_factory_{this};
+   base::WeakPtrFactory<RecentTabsSubMenuModel>
+       weak_ptr_factory_for_other_devices_tab_{this};
+--- a/chrome/browser/ui/tabs/recent_tabs_sub_menu_model.cc
++++ b/chrome/browser/ui/tabs/recent_tabs_sub_menu_model.cc
+@@ -154,13 +154,17 @@
+ 
+ RecentTabsSubMenuModel::RecentTabsSubMenuModel(
+     ui::AcceleratorProvider* accelerator_provider,
+-    BrowserWindowInterface* browser)
++    BrowserWindowInterface* browser,
++    bool closed_tabs_only)
+     : ui::SimpleMenuModel(this),
+       browser_(browser),
+       session_sync_service_(
+-          SessionSyncServiceFactory::GetInstance()->GetForProfile(
+-              browser->GetProfile())),
+-      next_menu_id_(kFirstMenuEntryCommandId) {
++          closed_tabs_only
++              ? nullptr
++              : SessionSyncServiceFactory::GetInstance()->GetForProfile(
++                    browser->GetProfile())),
++      next_menu_id_(kFirstMenuEntryCommandId),
++      closed_tabs_only_(closed_tabs_only) {
+   // Invoke asynchronous call to load tabs from local last session, which does
+   // nothing if the tabs have already been loaded or they shouldn't be loaded.
+   // TabRestoreServiceChanged() will be called after the tabs are loaded.
+@@ -416,6 +420,22 @@
+   // - Separator
+   // - Your devices header
+   // - A list of remote devices.
++  if (closed_tabs_only_) {
++    // Only the recently closed entries. A leading NORMAL_SEPARATOR would be
++    // dropped by SimpleMenuModel, so use a spacing separator to keep the
++    // index bookkeeping below intact.
++    history_separator_index_ = 0;
++    last_local_model_index_ = 0;
++    if (!ShouldShowRecentTabEntries()) {
++      is_dynamic_section_built_ = false;
++      return;
++    }
++    AddSeparator(ui::SPACING_SEPARATOR);
++    BuildLocalEntries();
++    is_dynamic_section_built_ = true;
++    return;
++  }
++
+   int next_command_id = 0;
+   InsertItemWithStringIdAt(next_command_id++, IDC_SHOW_HISTORY,
+                            IDS_HISTORY_SHOW_HISTORY);
+@@ -474,7 +494,7 @@
+ 
+     int added_count = 0;
+     for (const auto& entry : service->entries()) {
+-      if (added_count == kMaxLocalEntries) {
++      if (!closed_tabs_only_ && added_count == kMaxLocalEntries) {
+         break;
+       }
+       switch (entry->type) {
+--- a/chrome/browser/ui/toolbar/toolbar_pref_names.cc
++++ b/chrome/browser/ui/toolbar/toolbar_pref_names.cc
+@@ -23,6 +23,12 @@
+     default_pinned_actions.Append(chrome_labs_action.value());
+   }
+ 
++  const std::optional<std::string>& recently_closed_action =
++      actions::ActionIdMap::ActionIdToString(kActionRecentlyClosedTabs);
++  if (recently_closed_action.has_value()) {
++    default_pinned_actions.Append(recently_closed_action.value());
++  }
++
+   if (base::FeatureList::IsEnabled(ttc::kTtc)) {
+     const std::optional<std::string>& ttc_action =
+         actions::ActionIdMap::ActionIdToString(kActionTtcToolbar);
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
+@@ -41,6 +41,7 @@
+   kCopyLink,
+   kTabSearch,
+   kSplitTab,
++  kRecentlyClosedTabs,
+   kContextualTasks,
+ };
+ 
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
+@@ -93,6 +93,8 @@
+       return side_panel::customize_chrome::mojom::ActionId::kCopyLink;
+     case kActionTabSearch:
+       return side_panel::customize_chrome::mojom::ActionId::kTabSearch;
++    case kActionRecentlyClosedTabs:
++      return side_panel::customize_chrome::mojom::ActionId::kRecentlyClosedTabs;
+     case kActionSplitTab:
+       return side_panel::customize_chrome::mojom::ActionId::kSplitTab;
+     case kActionSidePanelShowContextualTasks:
+@@ -155,6 +157,8 @@
+       return kActionCopyUrl;
+     case side_panel::customize_chrome::mojom::ActionId::kTabSearch:
+       return kActionTabSearch;
++    case side_panel::customize_chrome::mojom::ActionId::kRecentlyClosedTabs:
++      return kActionRecentlyClosedTabs;
+     case side_panel::customize_chrome::mojom::ActionId::kSplitTab:
+       return kActionSplitTab;
+     case side_panel::customize_chrome::mojom::ActionId::kContextualTasks:
+@@ -477,6 +481,8 @@
+ 
+   add_action(kActionTabSearch,
+              side_panel::customize_chrome::mojom::CategoryId::kTools);
++  add_action(kActionRecentlyClosedTabs,
++             side_panel::customize_chrome::mojom::CategoryId::kTools);
+   add_action(kActionSidePanelShowBookmarks,
+              side_panel::customize_chrome::mojom::CategoryId::kTools);
+   add_action(kActionSidePanelShowHistoryCluster,
