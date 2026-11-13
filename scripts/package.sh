@@ -23,10 +23,12 @@ if [ "$_arch" = "x64" ]; then
     _arch="x86_64"
 fi
 
-# Unofficial mouse gestures build: distinct asset names, and AppImage
-# updates come from this fork rather than the official releases.
-_release_name="$_app_name-gestures-$_version-$_arch"
-_update_info="gh-releases-zsync|rafzzzzzz|helium-linux|latest|$_app_name-gestures-*-$_arch.AppImage.zsync"
+# Radium (unofficial Helium fork): own asset names, and AppImage updates
+# come from this fork rather than the official releases. Binaries keep the
+# helium name so the app id, profile folder and window class don't change.
+_brand="radium"
+_release_name="$_brand-$_version-$_arch"
+_update_info="gh-releases-zsync|rafzzzzzz|helium-linux|latest|$_brand-*-$_arch.AppImage.zsync"
 _tarball_name="${_release_name}_linux"
 _tarball_dir="$_release_dir/$_tarball_name"
 
@@ -106,7 +108,7 @@ for out in "$_app_dir/helium.png" "${_app_dir}/usr/share/icons/hicolor/256x256/a
     cp "${_app_dir}/opt/helium/product_logo_256.png" "$out"
 done
 
-export APPIMAGETOOL_APP_NAME="Helium"
+export APPIMAGETOOL_APP_NAME="Radium"
 export VERSION="$_version"
 
 # check whether CI GPG secrets are available

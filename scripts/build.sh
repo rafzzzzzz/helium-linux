@@ -23,8 +23,10 @@ apply_patches
 apply_domsub
 helium_substitution
 helium_apply_translations
+radium_substitution
 helium_version
 helium_resources
+radium_resources
 write_gn_args
 gn_gen
 build

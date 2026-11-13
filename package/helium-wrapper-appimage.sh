@@ -70,8 +70,8 @@ print_apparmor_profile() {
 }
 
 if needs_apparmor_bootstrap && has_apparmor_prereqs; then
-    echo "Helium has detected that your system uses AppArmor." >&2
-    echo "Before Helium can run, it needs to create an AppArmor profile for itself." >&2
+    echo "Radium has detected that your system uses AppArmor." >&2
+    echo "Before Radium can run, it needs to create an AppArmor profile for itself." >&2
     echo "It will request to run commands as root. If you do not wish to do this, please exit." >&2
 
     print_apparmor_profile | sudo_shim tee "$AA_PROFILE_PATH" && \

@@ -4,11 +4,11 @@
   <launchable type="desktop-id">helium.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <name>Helium</name>
+  <name>Radium</name>
   <summary>Private, fast, and honest web browser</summary>
   <description>
     <p>
-      Helium is a private, fast, and honest web browser based on Chromium.
+      Radium is an unofficial fork of Helium, a private, fast, and honest web browser based on Chromium.
       It prioritizes user privacy while maintaining excellent performance and
       a clean browsing experience.
     </p>

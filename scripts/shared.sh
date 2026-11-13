@@ -101,6 +101,25 @@ helium_version() {
         --chromium-tree "$_src_dir"
 }
 
+# Radium rebrand: rename the visible product name Helium -> Radium (after
+# Helium's own Chrome -> Helium substitution and translations).
+radium_substitution() {
+    python3 "$_root_dir/scripts/radium_substitution.py" --sub \
+        -t "$_src_dir" --backup-path "$_build_dir/radiumsubs.tar"
+}
+
+# Radium rebrand: copy Radium's logos over every branding destination
+# Helium uses, plus the new tab page favicon (Helium's is its logo), and
+# swap the logo on the first-run Welcome page. Fails loudly if upstream adds
+# a branding file we lack.
+radium_resources() {
+    grep -E '^(branding/|generated/product_icon/|favicons/favicon_ntp_)' \
+        "$_main_repo/resources/helium_resources.txt" > "$_build_dir/radium_resources.txt"
+    python3 "$_main_repo/utils/replace_resources.py" \
+        "$_build_dir/radium_resources.txt" "$_root_dir/resources/radium" "$_src_dir"
+    python3 "$_root_dir/scripts/radium_onboarding.py" "$_src_dir" "$_root_dir"
+}
+
 helium_resources() {
     python3 "$_main_repo/utils/generate_resources.py" "$_main_repo/resources/generate_resources.txt" "$_main_repo/resources"
     python3 "$_main_repo/utils/replace_resources.py" "$_main_repo/resources/helium_resources.txt" "$_main_repo/resources" "$_src_dir"
