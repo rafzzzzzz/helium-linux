@@ -39,7 +39,7 @@ and a plain right-click still opens the normal context menu.
 ## Download
 
 Grab the AppImage or tarball from the
-[releases page](https://github.com/rafzzzzzz/helium-linux/releases).
+[releases page](https://github.com/rafzzzzzz/radium-linux/releases).
 x86_64 only. Builds lag behind official Helium releases, so you'll get security
 fixes later than with official Helium.
 

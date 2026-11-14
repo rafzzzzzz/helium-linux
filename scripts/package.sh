@@ -28,7 +28,7 @@ fi
 # helium name so the app id, profile folder and window class don't change.
 _brand="radium"
 _release_name="$_brand-$_version-$_arch"
-_update_info="gh-releases-zsync|rafzzzzzz|helium-linux|latest|$_brand-*-$_arch.AppImage.zsync"
+_update_info="gh-releases-zsync|rafzzzzzz|radium-linux|latest|$_brand-*-$_arch.AppImage.zsync"
 _tarball_name="${_release_name}_linux"
 _tarball_dir="$_release_dir/$_tarball_name"
 
